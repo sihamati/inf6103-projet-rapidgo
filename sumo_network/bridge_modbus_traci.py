@@ -36,7 +36,11 @@ ROUTE_FILE = "routes.rou.xml"
 MODBUS_HOST = "127.0.0.1"
 MODBUS_PORT = 5020
 
-POLL_INTERVAL_STEPS = 50  # relit les registres Modbus toutes les 50 secondes simulees
+POLL_INTERVAL_STEPS = 10  # relit les registres Modbus toutes les 10 secondes simulees
+LIVE_STATS_INTERVAL_STEPS = 10  # affiche un tableau de bord -- MEME intervalle que POLL_INTERVAL_STEPS,
+                                  # pour que le tableau de bord n'affiche jamais une valeur perimee
+
+BASELINE_VALUES = [27, 27, 27, 42, 42]
 
 CROSS_EDGES = ["E5", "-E5", "E6", "-E6", "E3", "-E3", "E4", "-E4"]
 CORRIDOR_EDGES = ["E0", "E1", "E2"]
@@ -75,6 +79,21 @@ def read_plc_registers(client):
     return result.registers  # [J1_corridor, J1_autreA, J1_autreB, J2_corridor, J2_autre]
 
 
+REGISTER_LABELS = ["J1 CORRIDOR", "J1 autreA", "J1 autreB", "J2 CORRIDOR", "J2 autre"]
+
+
+def print_register_status(step, last_values):
+    """Affiche uniquement l'etat des registres Modbus du PLC (pas de KPI de
+    trafic ici -- voir live_kpi_monitor.py, lance dans un terminal separe,
+    pour le suivi des KPI en temps reel)."""
+    etat = "BASELINE (programme legitime)"
+    if last_values is not None and list(last_values) != BASELINE_VALUES:
+        etat = "*** ATTAQUE ACTIVE ***"
+
+    valeurs = ", ".join(f"{label}={val}" for label, val in zip(REGISTER_LABELS, last_values or []))
+    print(f"[Registres] t={step:5d}s | {etat} | {valeurs}")
+
+
 def apply_durations_to_tls(tls_id, phase_index_map, new_values):
     """Reconstruit le programme de feu de tls_id avec les nouvelles durees,
     en conservant les etats (state strings) d'origine -- seule la duree
@@ -107,6 +126,19 @@ def run(tripinfo_output, queue_output_csv):
                   f"Avez-vous bien lance plc_server.py dans un autre terminal ?")
     print(f"[Pont] Connecte au serveur PLC sur {MODBUS_HOST}:{MODBUS_PORT}")
 
+    # Avertissement : le serveur PLC tourne en continu (Terminal A) et garde
+    # en memoire la DERNIERE valeur ecrite par une attaque precedente, meme
+    # apres le redemarrage du pont. Si les valeurs lues au demarrage ne sont
+    # pas le baseline [27, 27, 27, 42, 42], ce n'est pas un bug -- c'est
+    # l'etat reel et persistant du PLC. Pour repartir d'un vrai baseline,
+    # executez "python attacker_client.py restore" AVANT de relancer ce pont.
+    initial_registers = read_plc_registers(client)
+    if initial_registers is not None and list(initial_registers) != BASELINE_VALUES:
+        print(f"[Pont] ATTENTION : le PLC ne contient PAS les valeurs baseline actuellement.")
+        print(f"[Pont]            Valeurs actuelles du PLC : {initial_registers}")
+        print(f"[Pont]            (Pour repartir du baseline, lancez dans un autre terminal : "
+              f"python attacker_client.py restore, PUIS relancez ce script.)")
+
     # --- Demarrage de SUMO ---
     sumo_cmd = [
         SUMO_BINARY,
@@ -120,7 +152,12 @@ def run(tripinfo_output, queue_output_csv):
     traci.start(sumo_cmd)
     print("[Pont] Simulation SUMO demarree.")
 
-    queue_rows = []
+    # Supprime un ancien fichier de meme nom pour repartir sur un CSV propre
+    # (sinon l'ecriture incrementale ci-dessous s'ajouterait a un fichier
+    # d'une execution precedente, potentiellement avec des colonnes differentes).
+    if os.path.exists(queue_output_csv):
+        os.remove(queue_output_csv)
+
     step = 0
     last_values = None
 
@@ -128,40 +165,77 @@ def run(tripinfo_output, queue_output_csv):
         traci.simulationStep()
 
         if step % POLL_INTERVAL_STEPS == 0:
+            # Lecture FRAICHE des registres a chaque intervalle -- cette
+            # meme valeur sert A LA FOIS a appliquer un changement eventuel
+            # ET a l'affichage du tableau de bord juste en dessous, pour
+            # garantir qu'on affiche toujours l'etat REEL et actuel du PLC,
+            # jamais une valeur en retard (perimee).
             registers = read_plc_registers(client)
-            if registers and registers != last_values:
-                print(f"[Pont] t={step}s -- Nouvelles valeurs recues du PLC : {registers}")
-                j1_values = {
-                    "corridor": registers[0],
-                    "autreA": registers[1],
-                    "autreB": registers[2],
-                }
-                j2_values = {"corridor": registers[3], "autre": registers[4]}
-                apply_durations_to_tls("J1", J1_PHASE_INDEX, j1_values)
-                apply_durations_to_tls("J2", J2_PHASE_INDEX, j2_values)
+            if registers is not None:
+                if registers != last_values:
+                    print(f"[Pont] t={step}s -- Nouvelles valeurs recues du PLC : {registers}")
+                    j1_values = {
+                        "corridor": registers[0],
+                        "autreA": registers[1],
+                        "autreB": registers[2],
+                    }
+                    j2_values = {"corridor": registers[3], "autre": registers[4]}
+                    apply_durations_to_tls("J1", J1_PHASE_INDEX, j1_values)
+                    apply_durations_to_tls("J2", J2_PHASE_INDEX, j2_values)
                 last_values = registers
+
+            print_register_status(step, last_values)
 
         row = {"time": step}
         for edge in CROSS_EDGES:
             row[f"halting_{edge}"] = traci.edge.getLastStepHaltingNumber(edge)
         for edge in CORRIDOR_EDGES:
             row[f"halting_{edge}"] = traci.edge.getLastStepHaltingNumber(edge)
-        queue_rows.append(row)
+        corridor_speeds = [traci.edge.getLastStepMeanSpeed(e) for e in CORRIDOR_EDGES]
+        row["corridor_speed_avg"] = sum(corridor_speeds) / len(corridor_speeds) if corridor_speeds else 0
+
+        # Temps d'attente moyen SEPARE par type de vehicule (rapidgo vs
+        # normal), uniquement sur le corridor (seul axe emprunte par
+        # RapidGo), pour comparer leur attente respective avant/apres
+        # l'attaque. getWaitingTime() donne le temps (s) depuis lequel le
+        # vehicule roule a moins de 0.1 m/s (donc "arrete dans la file").
+        # On doit faire ce calcul ici (dans le pont) car seule la connexion
+        # TraCI active a acces au type de chaque vehicule individuel.
+        rapidgo_waits = []
+        normal_waits = []
+        for edge in CORRIDOR_EDGES:
+            for veh_id in traci.edge.getLastStepVehicleIDs(edge):
+                v_type = traci.vehicle.getTypeID(veh_id)
+                v_wait = traci.vehicle.getWaitingTime(veh_id)
+                if v_type == "rapidgo":
+                    rapidgo_waits.append(v_wait)
+                elif v_type == "normal":
+                    normal_waits.append(v_wait)
+
+        row["rapidgo_wait_avg"] = sum(rapidgo_waits) / len(rapidgo_waits) if rapidgo_waits else ""
+        row["normal_wait_avg"] = sum(normal_waits) / len(normal_waits) if normal_waits else ""
+        # Marqueur simple pour qu'un script externe (ex. live_kpi_monitor.py)
+        # puisse distinguer baseline vs attaque directement depuis le CSV,
+        # sans avoir besoin d'une 2e connexion TraCI (non supportee par
+        # defaut -- un seul client TraCI a la fois).
+        row["attack_active"] = 0 if (last_values is None or list(last_values) == BASELINE_VALUES) else 1
+
+        # Ecriture incrementale du CSV (append) pour qu'un script externe
+        # puisse le lire EN DIRECT pendant que la simulation tourne, plutot
+        # que d'attendre la fin (ou tout le fichier n'est ecrit qu'a la fin).
+        write_header = not os.path.exists(queue_output_csv)
+        with open(queue_output_csv, "a", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(row.keys()))
+            if write_header:
+                writer.writeheader()
+            writer.writerow(row)
 
         step += 1
 
     traci.close()
     client.close()
     print(f"[Pont] Simulation terminee apres {step} pas de temps.")
-
-    if queue_rows:
-        fieldnames = list(queue_rows[0].keys())
-        with open(queue_output_csv, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(queue_rows)
-        print(f"[Pont] Donnees de files d'attente sauvegardees dans {queue_output_csv}")
-
+    print(f"[Pont] Donnees de files d'attente (ecrites en continu) dans {queue_output_csv}")
     print(f"[Pont] Donnees detaillees par vehicule sauvegardees dans {tripinfo_output}")
 
 
