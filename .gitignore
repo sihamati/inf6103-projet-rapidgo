@@ -1,0 +1,10 @@
+# Environnement virtuel Python
+venv/
+__pycache__/
+*.pyc
+
+# Fichiers temporaires SUMO/netedit
+*.net.xml.bak
+
+# VS Code
+.vscode/

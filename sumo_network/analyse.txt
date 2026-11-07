@@ -1,0 +1,20 @@
+Jonction	Type	Position	Rôle
+J0	dead_end	gauche (x=-54)	Entrée/sortie corridor (ouest)
+J1	traffic_light	x=-2	1ʳᵉ intersection avec feu
+J2	traffic_light	x=41	2ᵉ intersection avec feu
+J3	dead_end	droite (x=101)	Entrée/sortie corridor (est)
+J4	dead_end	haut (x=40, y=54)	Branche nord de J2
+J5	dead_end	bas (x=41, y=-38)	Branche sud de J2
+J6	dead_end	haut (x=-2, y=56)	Branche nord de J1
+J7	dead_end	bas (x=-1, y=-36)	Branche sud de J1
+
+
+Arêtes du corridor principal (axe RapidGo)
+E0 : J0 → J1 (et -E0 : J1 → J0)
+E1 : J1 → J2 (et -E1 : J2 → J1)
+E2 : J2 → J3 (et -E2 : J3 → J2)
+Arêtes transversales
+E5 : J1 → J6 (nord) / -E5 : J6 → J1
+E6 : J1 → J7 (sud) / -E6 : J7 → J1
+E3 : J2 → J4 (nord) / -E3 : J4 → J2
+E4 : J2 → J5 (sud) / -E4 : J5 → J2
