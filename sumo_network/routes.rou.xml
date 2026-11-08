@@ -1,26 +1,65 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+Fichier de routes pour LastNetwork.net.xml (grille 2 rangees x 4 colonnes,
+8 intersections a feux : J1-J2-J3-J4 en haut, J10-J6-J7-J11 en bas,
+reliees par 4 connecteurs verticaux J1-J10, J2-J6, J3-J7, J4-J11).
+
+Topologie reconstruite directement depuis les balises <edge from= to=> du
+fichier reseau (pas devinee) :
+
+  Rangee haut   : J0 - J1 - J2 - J3 - J4 - J18   (E0,E1,E2,E3,E20)
+  Rangee bas    : J9 - J10 - J6 - J7 - J11 - J19 (E8,E9,E10,E11,E21)
+  Connecteurs   : J12-J1-J10-J15, J5-J2-J6-J16, J8-J3-J7-J17, J13-J4-J11-J14
+
+RapidGo (route_rapidgo) : J0 -> J1 -> J2 -> J6 -> J7 -> J11 -> J14
+  (E0 E1 E5 E10 E11 E16), traverse 5 feux : J1, J2, J6, J7, J11.
+-->
 <routes xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="http://sumo.dlr.de/xsd/routes_file.xsd">
 
-    <!-- Types de véhicules -->
-    <vType id="rapidgo" accel="2.6" decel="4.5" sigma="0.5" length="4.5" maxSpeed="13.89" color="1,0,0"/>
-    <vType id="normal"  accel="2.6" decel="4.5" sigma="0.5" length="4.5" maxSpeed="13.89" color="0.3,0.3,0.3"/>
+    <vType id="rapidgo" accel="2.6" decel="4.5" sigma="0.5" length="5" minGap="2.5"
+           maxSpeed="16.67" color="1,1,1" guiShape="passenger"/>
 
-    <!-- Flotte RapidGo : traverse tout le corridor d'ouest en est (J0 -> J1 -> J2 -> J3) -->
-    <flow id="rapidgo_flow" type="rapidgo" from="E0" to="E2" begin="0" end="3600" period="30" departSpeed="max"/>
+    <vType id="normal" accel="2.0" decel="4.0" sigma="0.5" length="5" minGap="2.5"
+           maxSpeed="13.89" color="0.6,0.6,0.6" guiShape="passenger"/>
 
-    <!-- Trafic general sur le meme corridor (non privilegie) -->
-    <flow id="corridor_normal" type="normal" from="E0" to="E2" begin="0" end="3600" period="45" departSpeed="max"/>
+    <!-- Trajet RapidGo : J0 -> J1 -> J2 -> J6 -> J7 -> J11 -> J14 -->
+    <route id="route_rapidgo" edges="E0 E1 E5 E10 E11 E16"/>
 
-    <!-- Trafic transversal a l'intersection J1 (nord-sud) -->
-    <flow id="j1_south_to_north" type="normal" from="-E6" to="E5" begin="0" end="3600" period="25" departSpeed="max"/>
-    <flow id="j1_north_to_south" type="normal" from="-E5" to="E6" begin="0" end="3600" period="25" departSpeed="max"/>
+    <!-- Route complete, sens aller : traverse les 8 feux (J0 -> ... -> J9) -->
+    <route id="route_aller" edges="E0 E1 E2 E3 E15 -E11 -E10 -E9 -E8"/>
 
-    <!-- Trafic transversal a l'intersection J2 (nord-sud) -->
-    <flow id="j2_south_to_north" type="normal" from="-E4" to="E3" begin="0" end="3600" period="25" departSpeed="max"/>
-    <flow id="j2_north_to_south" type="normal" from="-E3" to="E4" begin="0" end="3600" period="25" departSpeed="max"/>
+    <!-- Route complete, sens retour : J9 -> ... -> J0 -->
+    <route id="route_retour" edges="E8 E9 E10 E11 -E15 -E3 -E2 -E1 -E0"/>
 
-    <!-- Trafic qui tourne depuis les branches vers le corridor (realisme supplementaire) -->
-    <flow id="j1_turn_in" type="normal" from="-E5" to="E1" begin="0" end="3600" period="60" departSpeed="max"/>
-    <flow id="j2_turn_in" type="normal" from="-E3" to="-E1" begin="0" end="3600" period="60" departSpeed="max"/>
+    <!-- 4 routes "transversales" (connecteurs verticaux), pour charger
+         chaque intersection avec du trafic venant d'une autre direction -->
+    <route id="route_vert_J1_J10" edges="-E13 -E12 E17"/>   <!-- J12 -> J1 -> J10 -> J15 -->
+    <route id="route_vert_J2_J6"  edges="E4 E5 E18"/>       <!-- J5  -> J2 -> J6  -> J16 -->
+    <route id="route_vert_J3_J7"  edges="-E7 E6 E19"/>      <!-- J8  -> J3 -> J7  -> J17 -->
+    <route id="route_vert_J4_J11" edges="E14 E15 E16"/>     <!-- J13 -> J4 -> J11 -> J14 -->
+
+    <!-- RapidGo (vehicules blancs) : 30 vehicules sur l'heure, sur le trajet route_rapidgo.
+         Modifier "number" pour changer le nombre de vehicules blancs. -->
+    <flow id="rapidgo_flow" type="rapidgo" route="route_rapidgo" begin="0" end="3600"
+          number="30" departSpeed="max" departLane="best"/>
+
+    <!-- Trafic normal, sens aller -->
+    <flow id="normal_aller" type="normal" route="route_aller" begin="0" end="3600"
+          period="45" departSpeed="max" departLane="best"/>
+
+    <!-- Trafic normal en sens inverse -->
+    <flow id="normal_retour" type="normal" route="route_retour" begin="0" end="3600"
+          period="40" departSpeed="max" departLane="best"/>
+
+    <!-- Trafic normal transversal, un flux par connecteur vertical, pour
+         charger chacune des 8 intersections avec du trafic croise -->
+    <flow id="normal_vert_J1_J10" type="normal" route="route_vert_J1_J10" begin="0" end="3600"
+          period="50" departSpeed="max" departLane="best"/>
+    <flow id="normal_vert_J2_J6" type="normal" route="route_vert_J2_J6" begin="0" end="3600"
+          period="50" departSpeed="max" departLane="best"/>
+    <flow id="normal_vert_J3_J7" type="normal" route="route_vert_J3_J7" begin="0" end="3600"
+          period="50" departSpeed="max" departLane="best"/>
+    <flow id="normal_vert_J4_J11" type="normal" route="route_vert_J4_J11" begin="0" end="3600"
+          period="50" departSpeed="max" departLane="best"/>
 
 </routes>
